@@ -1,16 +1,17 @@
 """
-data_loader.py — Chargement et nettoyage des fichiers Excel Amendis DSI Tétouan
+data_loader.py — Chargement et nettoyage robuste des fichiers Excel Amendis DSI Tétouan
 """
 import pandas as pd
 import numpy as np
-import streamlit as st
 from io import BytesIO
 
+CURRENT_YEAR = 2026
 
-# ─── Colonnes attendues ───────────────────────────────────────────────────────
+# ─── Colonnes inventaire PC ───────────────────────────────────────────────────
 INV_COLS = {
     "Utilisateur": "utilisateur",
     "TRAITE DEMANDE CLIENT ": "traite_demande",
+    "TRAITE DEMANDE CLIENT": "traite_demande",
     "WATERP OUI/NON": "waterp",
     "Poste sensible": "poste_sensible",
     "DIRECTION": "direction",
@@ -23,35 +24,25 @@ INV_COLS = {
     "Ancienneté": "anciennete",
     "Période d'ancienneté": "periode_anciennete",
     "N° SERIE ": "n_serie",
+    "N° SERIE": "n_serie",
     "DESCRIPTIONS ": "descriptions",
+    "DESCRIPTIONS": "descriptions",
     "RAM": "ram",
     "PROCESSEUR": "processeur",
     "HDD": "hdd",
     "OBSERVATION ": "observation",
-}
-
-IMP_COLS_NON_LOC = {
-    0: "utilisateur",
-    1: "direction",
-    2: "site",
-    3: "n_inventaire",
-    4: "date_acquisition",
-    5: "annee_acquisition",
-    6: "modele",
-    7: "type_imp",
-    8: "n_serie",
-    9: "etat",
+    "OBSERVATION": "observation",
 }
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
-    """Strip whitespace from all string columns."""
+    """Strip whitespace de toutes les colonnes string."""
     for col in df.columns:
         try:
             if df[col].dtype == object:
                 df[col] = df[col].astype(str).str.strip()
-                df[col] = df[col].replace({"nan": np.nan, "NaT": np.nan, "None": np.nan})
+                df[col] = df[col].replace({"nan": np.nan, "NaT": np.nan, "None": np.nan, "": np.nan})
         except Exception:
             pass
     return df
@@ -62,18 +53,21 @@ def _clean_ram(val):
     if pd.isna(val):
         return np.nan
     s = str(val).upper().strip()
-    if "GO" in s or "GB" in s:
-        try:
-            return int("".join(filter(str.isdigit, s.split("G")[0])))
-        except Exception:
-            return np.nan
+    # Cas: "8 GO", "8GO", "8 GB", "8GB", "8"
+    import re
+    m = re.search(r'(\d+)', s)
+    if m:
+        v = int(m.group(1))
+        # Valeurs réalistes: 1, 2, 4, 8, 16, 32, 64
+        if 0 < v <= 128:
+            return v
     return np.nan
 
 
 def _age_category(annee):
     """Catégorie d'ancienneté basée sur l'année d'acquisition."""
     try:
-        age = 2026 - int(annee)
+        age = CURRENT_YEAR - int(float(annee))
         if age <= 3:
             return "Récent (≤3 ans)"
         elif age <= 5:
@@ -87,29 +81,45 @@ def _age_category(annee):
 
 
 def _recommend_pc(row):
-    """Recommandation de remplacement PC."""
-    age = 2026 - int(row["annee_acquisition"]) if pd.notna(row["annee_acquisition"]) else 0
-    ram = row.get("ram_go", 0) or 0
-    proc = str(row.get("processeur", "")).upper()
-    type_pc = str(row.get("type_pc", "")).upper()
+    """Recommandation de remplacement PC basée sur l'âge, RAM, processeur."""
+    try:
+        age = CURRENT_YEAR - int(float(row.get("annee_acquisition", CURRENT_YEAR)))
+    except Exception:
+        age = 0
 
+    ram = row.get("ram_go", 0)
+    try:
+        ram = float(ram) if pd.notna(ram) else 0
+    except Exception:
+        ram = 0
+
+    proc = str(row.get("processeur", "")).upper()
     score = 0
     reasons = []
 
     if age > 10:
         score += 3
-        reasons.append("Ancienneté >10 ans")
+        reasons.append(f"Ancienneté critique: {age} ans")
     elif age > 7:
         score += 2
-        reasons.append("Ancienneté >7 ans")
+        reasons.append(f"Ancienneté: {age} ans")
+    elif age > 5:
+        score += 1
+        reasons.append(f"Ancienneté: {age} ans")
 
-    if ram < 4:
+    if ram > 0 and ram < 4:
         score += 2
-        reasons.append(f"RAM insuffisante ({ram}GO)")
+        reasons.append(f"RAM insuffisante ({int(ram)} GO)")
+    elif ram > 0 and ram < 8:
+        score += 1
+        reasons.append(f"RAM faible ({int(ram)} GO)")
 
-    if "DUAL CORE" in proc or "CELERON" in proc:
+    if any(k in proc for k in ["DUAL CORE", "CELERON", "PENTIUM", "ATOM"]):
         score += 2
         reasons.append("Processeur obsolète")
+    elif "I3" in proc and age > 5:
+        score += 1
+        reasons.append("Processeur i3 vieillissant")
 
     if score >= 5:
         priority = "🔴 Urgent"
@@ -129,34 +139,103 @@ def _recommend_pc(row):
         "recommandation": rec,
         "raisons": ", ".join(reasons) if reasons else "Équipement conforme",
         "score": score,
+        "age_annees": age,
     })
+
+
+# ─── Recherche flexible de colonnes ──────────────────────────────────────────
+def _find_col(df_columns, keywords):
+    """Trouve une colonne par mots-clés (insensible à la casse)."""
+    for col in df_columns:
+        col_up = str(col).upper().strip()
+        for kw in keywords:
+            if kw.upper() in col_up:
+                return col
+    return None
+
+
+def _auto_rename(df: pd.DataFrame) -> pd.DataFrame:
+    """Renommage automatique des colonnes PC par détection de mots-clés."""
+    rename = {}
+    cols = list(df.columns)
+
+    mappings = [
+        (["UTILISATEUR", "NOM PRENOM", "NOM ET PRENOM", "EMPLOYE"], "utilisateur"),
+        (["DIRECTION", " DIR "], "direction"),
+        (["SITE", "LOCALITE", "LOCALITÉ"], "site"),
+        (["N° INV", "INVENTAIRE", "N°INV", "NINV"], "n_inventaire"),
+        (["DATE ACQ", "DATE D'ACQ"], "date_acquisition"),
+        (["ANNÉE ACQ", "ANNEE ACQ", "ANNÉE D'ACQ", "ANNEE D'ACQ"], "annee_acquisition"),
+        (["ANCIENNETÉ", "ANCIENNETE"], "anciennete"),
+        (["TYPE"], "type_pc"),
+        (["N° SERIE", "N°SERIE", "SERIE"], "n_serie"),
+        (["DESCRIPTION", "MODELE", "MARQUE"], "descriptions"),
+        (["RAM"], "ram"),
+        (["PROCESSEUR", "CPU", "PROCESSOR"], "processeur"),
+        (["HDD", "DISQUE", "STOCKAGE"], "hdd"),
+        (["OBSERVATION"], "observation"),
+        (["WATERP"], "waterp"),
+        (["SENSIBLE"], "poste_sensible"),
+        (["TRAITE", "DEMANDE"], "traite_demande"),
+        (["PERIODE", "PÉRIODE"], "periode_anciennete"),
+    ]
+
+    used_targets = set()
+    for keywords, target in mappings:
+        if target in used_targets:
+            continue
+        found = _find_col(cols, keywords)
+        if found and found not in rename:
+            rename[found] = target
+            used_targets.add(target)
+
+    return df.rename(columns=rename)
 
 
 # ─── Chargement inventaire PC ─────────────────────────────────────────────────
 def load_inventaire(file) -> pd.DataFrame:
-    """Charge et nettoie le fichier inventaire PC (Tétouan 2026)."""
+    """Charge et nettoie le fichier inventaire PC Tétouan."""
     xl = pd.ExcelFile(file)
-
-    # Feuille principale avec données propres
     df = None
-    for sheet in ["Ecart INV FIN 2025", "mouvement 2025"]:
-        if sheet in xl.sheet_names:
-            if sheet == "Ecart INV FIN 2025":
-                raw = pd.read_excel(file, sheet_name=sheet)
-                # Vérifier que les colonnes sont correctes
-                if "Utilisateur" in raw.columns:
-                    df = raw
-                    break
-            elif sheet == "mouvement 2025":
-                raw = pd.read_excel(file, sheet_name=sheet, header=3)
-                if "Utilisateur" in raw.columns:
-                    df = raw
-                    break
+
+    # Essayer toutes les feuilles dans l'ordre de priorité
+    priority_sheets = ["Ecart INV FIN 2025", "mouvement 2025", "INVENTAIRE", "Inventaire", "PC", "Sheet1"]
+    sheets_to_try = priority_sheets + [s for s in xl.sheet_names if s not in priority_sheets]
+
+    for sheet in sheets_to_try:
+        if sheet not in xl.sheet_names:
+            continue
+        try:
+            # Essayer d'abord sans header spécial
+            for header_row in [0, 1, 2, 3, 4]:
+                try:
+                    raw = pd.read_excel(file, sheet_name=sheet, header=header_row)
+                    raw = raw.dropna(how="all")
+                    if len(raw) < 3:
+                        continue
+                    # Vérifier qu'on a au moins une colonne reconnaissable
+                    cols_up = [str(c).upper().strip() for c in raw.columns]
+                    has_user = any("UTILISATEUR" in c or "NOM" in c for c in cols_up)
+                    has_dir = any("DIRECTION" in c or "DIR" in c for c in cols_up)
+                    if has_user or (has_dir and len(raw) > 10):
+                        df = raw
+                        break
+                except Exception:
+                    continue
+            if df is not None:
+                break
+        except Exception:
+            continue
 
     if df is None:
-        raise ValueError("Impossible de trouver la feuille d'inventaire principale.")
+        # Dernier recours: première feuille
+        try:
+            df = pd.read_excel(file, sheet_name=0)
+        except Exception:
+            raise ValueError("Impossible de lire le fichier Excel. Vérifiez le format.")
 
-    # Garder seulement les colonnes connues
+    # Renommer les colonnes
+    # D'abord essayer le mapping exact
     rename_map = {}
     for original, clean in INV_COLS.items():
         for col in df.columns:
@@ -164,45 +243,68 @@ def load_inventaire(file) -> pd.DataFrame:
                 rename_map[col] = clean
                 break
 
-    df = df.rename(columns=rename_map)
+    if len(rename_map) < 3:
+        # Fallback: renommage automatique par mots-clés
+        df = _auto_rename(df)
+    else:
+        df = df.rename(columns=rename_map)
 
-    # Garder les colonnes qui existent
-    keep = [c for c in INV_COLS.values() if c in df.columns]
-    df = df[keep].copy()
     df = _normalize(df)
 
-    # Filtrer les lignes vides ou parasites
-    df = df[df["utilisateur"].notna()]
-    df = df[~df["utilisateur"].str.upper().isin(["UTILISATEUR", "PC BUREAU", "PC PORTABLE", "NAN"])]
-    df = df[~df.get("direction", pd.Series(dtype=str)).str.upper().isin(["DIRECTION", "NAN"])]
+    # Garder les colonnes utiles
+    target_cols = list(set(INV_COLS.values()))
+    keep = [c for c in target_cols if c in df.columns]
+    df = df[keep].copy()
 
-    # Nettoyage colonnes clés
+    # Filtrer les lignes vides/parasites
+    if "utilisateur" in df.columns:
+        df = df[df["utilisateur"].notna()]
+        garbage = ["UTILISATEUR", "PC BUREAU", "PC PORTABLE", "NAN", "NOM", "NOM PRÉNOM",
+                   "NOM ET PRENOM", "TOTAL", "SOUS-TOTAL", ""]
+        df = df[~df["utilisateur"].str.upper().isin(garbage)]
+
+    # Nettoyage type_pc
     if "type_pc" in df.columns:
-        df["type_pc"] = df["type_pc"].str.upper().str.strip()
-        df = df[df["type_pc"].isin(["BUREAU", "BUREAU ", "PORTABLE", "PORTABLE ", "STATION", "CHROMBOOK"])]
-        df["type_pc"] = df["type_pc"].str.strip()
+        df["type_pc"] = df["type_pc"].astype(str).str.upper().str.strip()
+        valid_types = ["BUREAU", "PORTABLE", "STATION", "CHROMBOOK", "LAPTOP", "DESKTOP"]
+        # Garder seulement les valeurs valides (ou NaN)
+        mask = df["type_pc"].isin(valid_types) | df["type_pc"].isna()
+        df = df[mask]
+        # Normalisation
+        df["type_pc"] = df["type_pc"].replace({
+            "LAPTOP": "PORTABLE", "DESKTOP": "BUREAU",
+            "BUREAU ": "BUREAU", "PORTABLE ": "PORTABLE"
+        })
 
+    # Conversions numériques
+    for col in ["annee_acquisition", "anciennete"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Filtrer les années aberrantes
     if "annee_acquisition" in df.columns:
-        df["annee_acquisition"] = pd.to_numeric(df["annee_acquisition"], errors="coerce")
+        df = df[df["annee_acquisition"].isna() | ((df["annee_acquisition"] >= 1990) & (df["annee_acquisition"] <= CURRENT_YEAR))]
 
-    if "anciennete" in df.columns:
-        df["anciennete"] = pd.to_numeric(df["anciennete"], errors="coerce")
-
+    # RAM nettoyée
     if "ram" in df.columns:
         df["ram_go"] = df["ram"].apply(_clean_ram)
 
+    # Normalisation direction
     if "direction" in df.columns:
-        df["direction"] = df["direction"].str.upper().str.strip()
+        df["direction"] = df["direction"].astype(str).str.upper().str.strip()
+        df = df[df["direction"].notna() & (df["direction"] != "NAN") & (df["direction"] != "DIRECTION")]
 
+    # Catégorie âge
     if "annee_acquisition" in df.columns:
         df["categorie_age"] = df["annee_acquisition"].apply(_age_category)
 
     # Recommandations
-    cols_rec = ["annee_acquisition", "ram_go", "processeur", "type_pc"]
-    if all(c in df.columns for c in cols_rec):
+    needed_cols = ["annee_acquisition"]
+    if all(c in df.columns for c in needed_cols):
         recs = df.apply(_recommend_pc, axis=1)
         df = pd.concat([df, recs], axis=1)
 
+    df = df.drop_duplicates()
     df = df.reset_index(drop=True)
     return df
 
@@ -213,72 +315,77 @@ def load_imprimantes(file) -> pd.DataFrame:
     xl = pd.ExcelFile(file)
     all_dfs = []
 
-    # Feuilles par direction avec données d'imprimantes
     direction_sheets = [
-        "DSI", "DSO+DSC+DCOM", "DRH", "DCF", "DAAI",
-        "DCJA", "DEA", "DEL", "DET", "DCL", "DQSE", "DOP",
-        "DRH MAJ", "NON LOCALISE ",
+        "DSI", "DSO+DSC+DCOM", "DRH", "DCF", "DAAI", "DCJA",
+        "DEA", "DEL", "DET", "DCL", "DQSE", "DOP",
+        "DRH MAJ", "NON LOCALISE ", "NON LOCALISE",
     ]
 
-    for sheet in direction_sheets:
-        if sheet not in xl.sheet_names:
-            continue
+    sheets_to_process = [s for s in xl.sheet_names if s not in ["Sommaire", "SOMMAIRE", "Total"]]
+
+    for sheet in sheets_to_process:
         try:
             raw = pd.read_excel(file, sheet_name=sheet, header=None)
+            raw = raw.dropna(how="all")
 
             # Trouver la ligne de headers
             header_row = None
             for i, row in raw.iterrows():
-                row_str = " ".join(str(v) for v in row.values).upper()
-                if "NOM" in row_str or "UTILISATEUR" in row_str:
+                row_str = " ".join(str(v).upper() for v in row.values if pd.notna(v))
+                if any(k in row_str for k in ["NOM", "UTILISATEUR", "MODELE", "MARQUE", "N° INV"]):
                     header_row = i
                     break
 
             if header_row is None:
-                continue
+                # Essayer la première ligne comme header
+                header_row = raw.index[0] if len(raw) > 0 else 0
 
             df_sheet = pd.read_excel(file, sheet_name=sheet, header=header_row)
-            df_sheet = df_sheet.dropna(how="all")
+            df_sheet = df_sheet.dropna(how="all").dropna(axis=1, how="all")
 
-            # Mapper les colonnes
+            if len(df_sheet) < 2:
+                continue
+
+            # Mapper les colonnes automatiquement
             col_map = {}
+            used = set()
             for col in df_sheet.columns:
                 cs = str(col).strip().upper()
-                if any(k in cs for k in ["NOM", "UTILISATEUR", "PRENOM"]):
-                    col_map[col] = "utilisateur"
-                elif cs in ["DIRECTION", "DIR"]:
-                    col_map[col] = "direction"
-                elif cs in ["SITE", "LOCALITE", "LOCALITÉ"]:
-                    col_map[col] = "site"
-                elif "INV" in cs or "N°" in cs:
-                    col_map[col] = "n_inventaire"
-                elif "DATE" in cs and "ACQ" in cs:
-                    col_map[col] = "date_acquisition"
-                elif "ANNÉE" in cs or "ANNEE" in cs:
-                    col_map[col] = "annee_acquisition"
-                elif "MARQUE" in cs or "MODEL" in cs or "DESCRI" in cs or "IMPRIM" in cs:
-                    col_map[col] = "modele"
-                elif "RESEAU" in cs or "MONO" in cs or "TYPE" in cs:
-                    col_map[col] = "type_imp"
-                elif "SERIE" in cs or "SN" in cs:
-                    col_map[col] = "n_serie"
+                if any(k in cs for k in ["NOM", "UTILISATEUR", "PRENOM"]) and "utilisateur" not in used:
+                    col_map[col] = "utilisateur"; used.add("utilisateur")
+                elif cs in ["DIRECTION", "DIR"] and "direction" not in used:
+                    col_map[col] = "direction"; used.add("direction")
+                elif any(k in cs for k in ["SITE", "LOCALITE", "LOCALITÉ"]) and "site" not in used:
+                    col_map[col] = "site"; used.add("site")
+                elif any(k in cs for k in ["N° INV", "NINV", "INVENTAIRE"]) and "n_inventaire" not in used:
+                    col_map[col] = "n_inventaire"; used.add("n_inventaire")
+                elif "DATE" in cs and "ACQ" in cs and "date_acquisition" not in used:
+                    col_map[col] = "date_acquisition"; used.add("date_acquisition")
+                elif any(k in cs for k in ["ANNÉE", "ANNEE"]) and "annee_acquisition" not in used:
+                    col_map[col] = "annee_acquisition"; used.add("annee_acquisition")
+                elif any(k in cs for k in ["MARQUE", "MODEL", "DESCRI", "IMPRIM"]) and "modele" not in used:
+                    col_map[col] = "modele"; used.add("modele")
+                elif any(k in cs for k in ["RESEAU", "MONO", "TYPE IMP", "TYPE"]) and "type_imp" not in used:
+                    col_map[col] = "type_imp"; used.add("type_imp")
+                elif any(k in cs for k in ["SERIE", "SN", "N° SERIE"]) and "n_serie" not in used:
+                    col_map[col] = "n_serie"; used.add("n_serie")
+                elif any(k in cs for k in ["ETAT", "ÉTAT", "STATUT"]) and "etat" not in used:
+                    col_map[col] = "etat"; used.add("etat")
 
             if not col_map:
                 continue
 
             df_sheet = df_sheet.rename(columns=col_map)
 
-            # Déduire la direction depuis le nom de la feuille
+            # Inférer la direction depuis le nom de la feuille
             if "direction" not in df_sheet.columns:
-                dir_name = sheet.split("+")[0].strip() if "+" in sheet else sheet.strip()
-                dir_name = dir_name.replace("MAJ", "").replace(" ", "")
-                df_sheet["direction"] = dir_name if dir_name != "NON LOCALISE" else np.nan
+                dir_name = sheet.split("+")[0].strip().replace("MAJ", "").strip()
+                df_sheet["direction"] = dir_name if "LOCALISE" not in dir_name.upper() else np.nan
 
             keep = [c for c in ["utilisateur", "direction", "site", "n_inventaire",
                                   "date_acquisition", "annee_acquisition", "modele",
-                                  "type_imp", "n_serie"] if c in df_sheet.columns]
+                                  "type_imp", "n_serie", "etat"] if c in df_sheet.columns]
             df_sheet = df_sheet[keep].copy()
-            # Drop duplicate columns
             df_sheet = df_sheet.loc[:, ~df_sheet.columns.duplicated()]
             all_dfs.append(df_sheet)
 
@@ -286,21 +393,23 @@ def load_imprimantes(file) -> pd.DataFrame:
             continue
 
     if not all_dfs:
-        raise ValueError("Impossible de charger les données d'imprimantes.")
+        raise ValueError("Impossible de charger les données d'imprimantes. Vérifiez le format du fichier.")
 
     df = pd.concat(all_dfs, ignore_index=True)
     df = _normalize(df)
 
     if "utilisateur" in df.columns:
         df = df[df["utilisateur"].notna()]
-        df = df[~df["utilisateur"].str.upper().isin(["NAN", "NOM", "UTILISATEUR", "NOM PRÉNOM"])]
+        df = df[~df["utilisateur"].str.upper().isin(["NAN", "NOM", "UTILISATEUR", "NOM PRÉNOM", "NOM ET PRÉNOM"])]
 
     if "annee_acquisition" in df.columns:
         df["annee_acquisition"] = pd.to_numeric(df["annee_acquisition"], errors="coerce")
 
     if "direction" in df.columns:
-        df["direction"] = df["direction"].str.upper().str.strip()
+        df["direction"] = df["direction"].astype(str).str.upper().str.strip()
 
-    df = df.drop_duplicates(subset=["utilisateur", "n_inventaire"] if "n_inventaire" in df.columns else None)
+    # Dédoublonnage
+    dedup_cols = ["utilisateur", "n_inventaire"] if "n_inventaire" in df.columns else ["utilisateur"]
+    df = df.drop_duplicates(subset=dedup_cols)
     df = df.reset_index(drop=True)
     return df

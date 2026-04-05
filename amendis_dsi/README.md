@@ -1,58 +1,50 @@
-# 🏢 DSI Amendis — Tableau de Bord Inventaire Tétouan
+# 🏢 DSI Amendis — Tableau de Bord Inventaire Tétouan v3.0
 
 Application Streamlit avancée pour la gestion de l'inventaire informatique du site Tétouan — Direction des Systèmes d'Information.
 
-## 🚀 Déploiement sur Streamlit Cloud (share.streamlit.io)
+## 🚀 Déploiement sur Streamlit Cloud
 
-### Étapes:
+1. **Upload sur GitHub** — Créez un repository et uploadez tous les fichiers
+2. **Déployer** sur [share.streamlit.io](https://share.streamlit.io)  
+   - Main file path: `app.py`
 
-1. **Upload sur GitHub**
-   - Créez un nouveau repository GitHub (ex: `amendis-dsi-inventaire`)
-   - Uploadez tous les fichiers de ce ZIP dans le repository
-
-2. **Déployer sur Streamlit Cloud**
-   - Allez sur [share.streamlit.io](https://share.streamlit.io)
-   - Cliquez sur **"New app"**
-   - Sélectionnez votre repository GitHub
-   - **Main file path:** `app.py`
-   - Cliquez **"Deploy!"**
-
-3. **Utilisation**
-   - L'app sera disponible via une URL publique
-   - Uploadez vos fichiers Excel via la sidebar
-
-## 📁 Structure des fichiers
+## 📁 Structure
 
 ```
 amendis_dsi/
 ├── app.py              ← Application principale Streamlit
-├── data_loader.py      ← Chargement & nettoyage des données Excel
-├── charts.py           ← Toutes les visualisations Plotly
-├── requirements.txt    ← Dépendances Python
+├── data_loader.py      ← Chargement robuste des données Excel (v3)
+├── charts.py           ← Visualisations Plotly
+├── pdf_export.py       ← Génération PDF professionnelle (NOUVEAU)
+├── requirements.txt
 ├── .streamlit/
-│   └── config.toml    ← Thème Rouge & Blanc Amendis
-└── README.md           ← Ce fichier
+│   └── config.toml
+└── README.md
 ```
 
-## 🎯 Fonctionnalités
+## 🎯 Fonctionnalités v3.0
 
 | Page | Description |
 |------|-------------|
-| 🏠 Tableau de bord | KPIs globaux + graphiques d'aperçu |
-| 📊 Rapport PC | Statistiques par direction/site, recommandations, données |
-| 🖨️ Rapport Imprimantes | Analyse parc imprimantes |
-| 📋 Rapport Général | Vue globale complète avec synthèse par direction |
-| 👤 Profil Utilisateur | Fiche technique personnalisée + recommandation PC |
+| 🏠 Tableau de bord | KPIs globaux + graphiques interactifs |
+| 📊 Rapport PC | Statistiques + recommandations + **export PDF** |
+| 🖨️ Rapport Imprimantes | Analyse parc + **export PDF** |
+| 📋 Rapport Général | Vue globale synthèse + **export PDF** |
+| 👤 Profil Utilisateur | Fiche technique + **export PDF & Excel** |
+
+## 📄 Exports PDF disponibles
+- **Fiche utilisateur** : profil complet avec recommandation DSI
+- **Rapport PC** : statistiques, âge, RAM, processeurs, urgents
+- **Rapport Imprimantes** : répartition et inventaire complet
+- **Rapport Général** : synthèse PC + Imprimantes par direction
+
+## 🔧 Amélioration du chargement des données (v3)
+- Détection automatique des colonnes par mots-clés
+- Lecture robuste sur toutes les feuilles Excel
+- Nettoyage intelligent RAM (formats variés)
+- Filtrage des lignes parasites amélioré
+- Calcul d'ancienneté et recommandations plus précis
 
 ## 📊 Fichiers Excel supportés
-
-- **Inventaire PC**: `_Inventaire_Tétouan_2026_.xlsx`
-  - Feuilles: `Ecart INV FIN 2025`, `mouvement 2025`
-- **Imprimantes**: `Inventaire_des_Imprimantes_Tétouan_.xlsx`
-  - Feuilles: DSI, DRH, DEA, DEL, DAAI, DCL, etc.
-
-## 🎨 Thème
-
-- **Couleurs principales**: Rouge Amendis (#C8102E) + Blanc
-- **Police**: Inter / Segoe UI
-- **Visualisations**: Plotly Express (interactif)
+- **PC** : `_Inventaire_Tétouan_2026_.xlsx` (feuilles: Ecart INV FIN 2025, mouvement 2025...)
+- **Imprimantes** : `Inventaire_des_Imprimantes_Tétouan_.xlsx` (feuilles DSI, DRH, DEA...)

@@ -372,7 +372,7 @@ with st.sidebar:
     st.markdown('<p style="font-size:11px; color:#64748B; font-weight:600; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">🎛️ FILTRES</p>', unsafe_allow_html=True)
 
     inv_data = st.session_state.inv_data
-    df_pc_raw = inv_data["pc"] if inv_data else None
+    df_pc_raw = inv_data["pc"] if inv_data is not None else None
 
     filter_direction = []
     if df_pc_raw is not None and "direction" in df_pc_raw.columns:
@@ -470,9 +470,9 @@ st.markdown(f"""
 
 # ─── Data ─────────────────────────────────────────────────────────────────────
 inv_data  = st.session_state.inv_data
-df_pc_raw = inv_data["pc"]              if inv_data else None
-df_mouvt  = inv_data["mouvements"]     if inv_data else None
-df_chrom  = inv_data["chromebooks"]    if inv_data else None
+df_pc_raw = inv_data["pc"]              if inv_data is not None else None
+df_mouvt  = inv_data["mouvements"]     if inv_data is not None else None
+df_chrom  = inv_data["chromebooks"]    if inv_data is not None else None
 df_imp    = st.session_state.df_imp
 
 df_pc_f   = apply_filters(df_pc_raw)

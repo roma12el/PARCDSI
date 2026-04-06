@@ -421,11 +421,11 @@ def section(title, icon=""):
     st.markdown(f'<div class="section-title">{icon} {title}</div>', unsafe_allow_html=True)
 
 
-def val_str(v):
-    if v is None: return "N/A"
-    if isinstance(v, float) and np.isnan(v): return "N/A"
+def val_str(v, default="N/A"):
+    if v is None: return default
+    if isinstance(v, float) and np.isnan(v): return default
     s = str(v).strip()
-    return s if s not in ("nan", "NaT", "None", "") else "N/A"
+    return s if s not in ("nan", "NaT", "None", "") else default
 
 
 def export_excel(df: pd.DataFrame, sheet_name="Données") -> bytes:

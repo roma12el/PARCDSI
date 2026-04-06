@@ -160,7 +160,10 @@ def _rename_cols(df: pd.DataFrame) -> pd.DataFrame:
             for k, v in INV_COL_MAP.items():
                 if k in key or (len(key) > 3 and key in k):
                     rename[col] = v; break
-    return df.rename(columns=rename)
+    df = df.rename(columns=rename)
+    # Supprimer colonnes dupliquées — garder la première occurrence
+    df = df.loc[:, ~df.columns.duplicated()]
+    return df
 
 
 def _fill_specs(df: pd.DataFrame) -> pd.DataFrame:
@@ -183,14 +186,22 @@ def _fill_specs(df: pd.DataFrame) -> pd.DataFrame:
 def _find_header_row(raw: pd.DataFrame, keywords=None):
     if keywords is None:
         keywords = ["UTILISATEUR", "UTILISATEURS", "NOM", "DIRECTION", "TYPE", "N° INV"]
+    best_row = 0
+    best_score = 0
     for i, row in raw.iterrows():
         row_str = " ".join(str(v).upper() for v in row.values if pd.notna(v))
-        if any(k in row_str for k in keywords):
-            return i
-    return 0
+        score = sum(1 for k in keywords if k in row_str)
+        if score > best_score:
+            best_score = score
+            best_row = i
+        if best_score >= 3:
+            break
+    return best_row
 
 
 def _clean_pc_df(df: pd.DataFrame) -> pd.DataFrame:
+    # Supprimer colonnes dupliquées avant tout traitement
+    df = df.loc[:, ~df.columns.duplicated()].copy()
     df = _normalize(df)
     if "type_pc" in df.columns:
         df["type_pc"] = df["type_pc"].astype(str).str.upper().str.strip()
@@ -202,7 +213,10 @@ def _clean_pc_df(df: pd.DataFrame) -> pd.DataFrame:
         df["direction"] = df["direction"].astype(str).str.upper().str.strip()
     for col in ["annee_acquisition", "anciennete"]:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            series = df[col]
+            if isinstance(series, pd.DataFrame):
+                series = series.iloc[:, 0]
+            df[col] = pd.to_numeric(series, errors="coerce")
     if "ram" in df.columns:
         df["ram_go"] = df["ram"].apply(_clean_ram)
     if "descriptions" in df.columns:
@@ -230,22 +244,27 @@ def load_inventaire(file) -> dict:
     result = {"pc": None, "mouvements": None, "chromebooks": None}
 
     # ── 1. Feuille principale PC ──────────────────────────────────────────────
-    pc_priority = ["Ecart INV FIN 2025", "INVENTAIRE", "Inventaire", "PC", "Sheet1", "Feuil1"]
+    pc_priority = ["Inventaire Global 2026", "Ecart INV FIN 2025", "INVENTAIRE", "Inventaire", "PC", "Sheet1", "Feuil1"]
     for sheet in pc_priority + [s for s in sheets if s not in pc_priority]:
         if sheet not in sheets:
             continue
-        # Sauter les feuilles mouvement/chrom
-        if any(k in sheet.lower() for k in ["mouvement", "mouvt", "chrom"]):
+        # Sauter les feuilles mouvement/chrom/scan/ecart telegestion/tableau/feuille
+        sheet_low = sheet.lower()
+        if any(k in sheet_low for k in ["mouvement", "mouvt", "chrom", "scanner", "telegestion", "tableau crois", "restitué", "localisé"]):
             continue
         try:
             raw = pd.read_excel(file, sheet_name=sheet, header=None).dropna(how="all").reset_index(drop=True)
-            if len(raw) < 5: continue
+            if len(raw) < 5:
+                continue
             hrow = _find_header_row(raw)
-            df = pd.read_excel(file, sheet_name=sheet, header=hrow).dropna(how="all").reset_index(drop=True)
+            # Utiliser les noms de colonnes directement depuis raw (ligne hrow)
+            col_names = raw.iloc[hrow].tolist()
+            df = raw.iloc[hrow + 1:].copy().reset_index(drop=True)
+            df.columns = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(col_names)]
+            df = df.dropna(how="all").reset_index(drop=True)
             df = _rename_cols(df)
             if "utilisateur" not in df.columns and "direction" not in df.columns:
                 continue
-            # GARDER TOUS — même si valeurs manquantes — juste supprimer lignes sans utilisateur du tout
             if "utilisateur" in df.columns:
                 df = df[df["utilisateur"].notna()]
                 df = df[~df["utilisateur"].astype(str).str.upper().str.strip().isin(TRASH_USERS)]
@@ -253,7 +272,7 @@ def load_inventaire(file) -> dict:
                 df = _clean_pc_df(df)
                 result["pc"] = df
                 break
-        except Exception as e:
+        except Exception:
             continue
 
     # ── 2. Feuille "mouvement" ────────────────────────────────────────────────
@@ -262,7 +281,10 @@ def load_inventaire(file) -> dict:
             try:
                 raw = pd.read_excel(file, sheet_name=sheet, header=None).dropna(how="all").reset_index(drop=True)
                 hrow = _find_header_row(raw)
-                df_m = pd.read_excel(file, sheet_name=sheet, header=hrow).dropna(how="all").reset_index(drop=True)
+                col_names = raw.iloc[hrow].tolist()
+                df_m = raw.iloc[hrow + 1:].copy().reset_index(drop=True)
+                df_m.columns = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(col_names)]
+                df_m = df_m.dropna(how="all").reset_index(drop=True)
                 df_m = _rename_cols(df_m)
                 if "utilisateur" in df_m.columns:
                     df_m = df_m[df_m["utilisateur"].notna()]
@@ -279,7 +301,10 @@ def load_inventaire(file) -> dict:
             try:
                 raw = pd.read_excel(file, sheet_name=sheet, header=None).dropna(how="all").reset_index(drop=True)
                 hrow = _find_header_row(raw)
-                df_c = pd.read_excel(file, sheet_name=sheet, header=hrow).dropna(how="all").reset_index(drop=True)
+                col_names_c = raw.iloc[hrow].tolist()
+                df_c = raw.iloc[hrow + 1:].copy().reset_index(drop=True)
+                df_c.columns = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(col_names_c)]
+                df_c = df_c.dropna(how="all").reset_index(drop=True)
                 df_c = _rename_cols(df_c)
                 if "utilisateur" in df_c.columns:
                     df_c = df_c[df_c["utilisateur"].notna()]

@@ -343,18 +343,37 @@ def load_inventaire(file) -> dict:
 def load_imprimantes(file) -> pd.DataFrame:
     xl = pd.ExcelFile(file)
     sheets = xl.sheet_names
-    skip = {"SOMMAIRE", "TOTAL", "RECAP", "RESUME", "BILAN", "SYNTHESE", "SYNTHÈSE"}
+    skip = {"SOMMAIRE","TOTAL","RECAP","RESUME","BILAN","SYNTHESE","SYNTHÈSE",
+            "PIVOT TABLE 9","PIVOT TABLE 8","PIVOT TABLE 7","PIVOT TABLE 5","PIVOT TABLE 2",
+            "ACHATS PAR ANNÉE","NON LOCALISE","ECART FIN 2025","IMF INSTALLÉES",
+            "BESOINS EN IMF TÉTOUAN","NBRE RESTITUÉES PAR MRQUE ET DI","IMP RRESTITUÉES MARQUE",
+            "F.DOSSIER IMP REST","RESTITUTIONMOIS","GLOB","MISE EN REBUT",
+            "SYNTHÈSE IMP RESTITUÉ PAR DIREC","SYNTHÈSE BELHAJ","REAFFECTATION TANGER",
+            "SHEET35"}
+
+    # Prioritize GLOBAL sheet first
+    priority_sheets = ["GLOBAL"] + [s for s in sheets if s.upper().strip() not in ["GLOBAL"]]
     all_dfs = []
 
-    for sheet in sheets:
+    for sheet in priority_sheets:
+        if sheet not in sheets:
+            continue
         if sheet.upper().strip() in skip:
+            continue
+        # Skip pivot/synthèse/ecart sheets
+        sheet_up = sheet.upper().strip()
+        if any(k in sheet_up for k in ["PIVOT","SYNTHÈSE","SYNTHESE","ECART","RESTITUT","REBUT","GLOB ","LOCALISE","BESOINS","INSTALLÉ"]):
             continue
         try:
             raw = pd.read_excel(file, sheet_name=sheet, header=None).dropna(how="all").reset_index(drop=True)
-            if len(raw) < 2: continue
+            if len(raw) < 3:
+                continue
 
-            hrow = _find_header_row(raw, ["NOM", "UTILISATEUR", "MODELE", "MARQUE", "N° INV", "DIRECTION", "SERIE"])
-            df_s = pd.read_excel(file, sheet_name=sheet, header=hrow).dropna(how="all").reset_index(drop=True)
+            hrow = _find_header_row(raw, ["NOM", "UTILISATEUR", "MODELE", "MARQUE", "N° INV", "DIRECTION", "SERIE", "NOMS"])
+            col_names = raw.iloc[hrow].tolist()
+            df_s = raw.iloc[hrow + 1:].copy().reset_index(drop=True)
+            df_s.columns = [str(c).strip() if pd.notna(c) else f"U{i}" for i, c in enumerate(col_names)]
+            df_s = df_s.dropna(how="all").reset_index(drop=True)
             df_s = df_s.loc[:, ~df_s.columns.duplicated()]
 
             col_map, used = {}, set()
@@ -363,34 +382,39 @@ def load_imprimantes(file) -> pd.DataFrame:
                 def try_map(keywords, target):
                     if target not in used and any(k in cs for k in keywords):
                         col_map[col] = target; used.add(target)
-                try_map(["NOM", "UTILISATEUR", "PRENOM"], "utilisateur")
-                try_map(["DIRECTION", " DIR "], "direction")
-                try_map(["SITE", "LOCALITE", "LOCALITÉ"], "site")
-                try_map(["N° INV", "NINV", "INVENTAIRE"], "n_inventaire")
-                try_map(["DATE ACQ", "DATE D'ACQ"], "date_acquisition")
-                try_map(["ANNÉE ACQ", "ANNEE ACQ", "ANNÉE D'ACQ", "ANNEE D'ACQ"], "annee_acquisition")
-                try_map(["MARQUE", "MODEL", "DESCRI", "IMPRIM", "DESIGN"], "modele")
-                try_map(["RESEAU", "MONO", "TYPE IMP", "TYPE"], "type_imp")
-                try_map(["SERIE", "SN", "N° SERIE"], "n_serie")
-                try_map(["ETAT", "ÉTAT", "STATUT", "OBS"], "etat")
+                try_map(["NOM","UTILISATEUR","PRENOM","NOMS"], "utilisateur")
+                try_map(["DIRECTION"," DIR "], "direction")
+                try_map(["SITE","LOCALITE","LOCALITÉ"], "site")
+                try_map(["N° INV","NINV","INVENTAIRE"], "n_inventaire")
+                try_map(["DATE ACQ","DATE DE LIVRAISON","DATE D'ACQ"], "date_acquisition")
+                try_map(["ANNÉE ACQ","ANNEE ACQ","ANNÉE D'ACQ","ANNEE D'ACQ","ANNEE D'ACQUISITION"], "annee_acquisition")
+                try_map(["MODELES","MODELE","MARQUE","DESCRI","IMPRIM","DESIGN","DESCRIPTION"], "modele")
+                try_map(["RESEAU","MONO","TYPE IMP","TYPE"], "type_imp")
+                try_map(["SERIE","SN","N° SERIE","N°SERIE"], "n_serie")
+                try_map(["ETAT","ÉTAT","STATUT","OBS","COMMENTAIRE"], "etat")
 
-            if not col_map: continue
+            if not col_map:
+                continue
             df_s = df_s.rename(columns=col_map)
 
             if "direction" not in df_s.columns or df_s.get("direction", pd.Series()).isna().all():
                 dir_name = re.sub(r'\s*(MAJ|2025|2026)\s*', '', sheet.upper().split("+")[0]).strip()
                 df_s["direction"] = dir_name if "LOCALISE" not in dir_name else np.nan
 
-            keep = [c for c in ["utilisateur","direction","site","n_inventaire",
-                                  "date_acquisition","annee_acquisition","modele",
-                                  "type_imp","n_serie","etat"] if c in df_s.columns]
-            if not keep: continue
+            keep = [c for c in ["utilisateur","direction","site","n_inventaire","date_acquisition","annee_acquisition","modele","type_imp","n_serie","etat"] if c in df_s.columns]
+            if not keep:
+                continue
             df_s = df_s[keep].copy()
 
             if "utilisateur" in df_s.columns:
                 df_s = df_s[df_s["utilisateur"].notna()]
-                trash = {"NAN","NOM","UTILISATEUR","NOM PRÉNOM","NOM ET PRÉNOM",""}
+                trash = {"NAN","NOM","UTILISATEUR","NOM PRÉNOM","NOM ET PRÉNOM","","NOMS"}
                 df_s = df_s[~df_s["utilisateur"].astype(str).str.upper().str.strip().isin(trash)]
+
+            # Clean modele: remove entries that are pure numbers (inventory numbers)
+            if "modele" in df_s.columns:
+                df_s["modele"] = df_s["modele"].astype(str).str.strip()
+                df_s.loc[df_s["modele"].str.match(r'^\d+\.?\d*$', na=False), "modele"] = np.nan
 
             if len(df_s) > 0:
                 all_dfs.append(df_s)

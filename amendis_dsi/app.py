@@ -458,33 +458,194 @@ elif page == "💻 Chromebooks":
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🔄 Mouvements":
     if df_mouvt is None or len(df_mouvt)==0: st.info("Aucun mouvement trouvé."); st.stop()
-    total_m=len(df_mouvt)
-    st.markdown(f"""<div style="background:linear-gradient(135deg,#2980B9,#1B4F72); border-radius:16px; padding:24px 28px; margin-bottom:20px; color:white;"><div style="font-size:22px; font-weight:800; margin-bottom:6px;">🔄 Mouvements PC</div><div style="font-size:13px; color:rgba(255,255,255,0.75);">{total_m} mouvements enregistrés</div></div>""", unsafe_allow_html=True)
-    nb_dir_m=df_mouvt["direction"].nunique() if "direction" in df_mouvt.columns else 0
-    c1,c2=st.columns(2); kpi(c1,"🔄","Total Mouvements",total_m,"#2980B9"); kpi(c2,"🏢","Directions",nb_dir_m,"#1B4F72")
-    if "direction" in df_mouvt.columns:
-        rpt_hdr("📊 Analyse des Mouvements")
-        c1,c2=st.columns(2)
-        with c1:
-            cnt_d=df_mouvt.groupby("direction").size().reset_index(name="count").sort_values("count")
-            fig_d=px.bar(cnt_d,x="count",y="direction",orientation="h",title="Mouvements par Direction",color="count",color_continuous_scale=[[0,"#AED6F1"],[1,"#2980B9"]],text="count")
+
+    # FIX: nettoyer type_pc — garder seulement BUREAU, PORTABLE, STATION, CHROMEBOOK
+    VALID_TYPES = {"BUREAU","PORTABLE","STATION","CHROMEBOOK","LAPTOP","FIXE"}
+    mouvt_clean = df_mouvt.copy()
+    if "type_pc" in mouvt_clean.columns:
+        mouvt_clean["type_pc_clean"] = mouvt_clean["type_pc"].apply(
+            lambda v: v if str(v).upper().strip() in VALID_TYPES else "BUREAU"
+        )
+    else:
+        mouvt_clean["type_pc_clean"] = "BUREAU"
+
+    # Raisons de mouvement depuis observation
+    OBS_CATS = {
+        "Hors Service":  ["HORS SERVICE","H/S","HS","PANNE"],
+        "Réaffecté":     ["REAFFECT","RÉAFFECT","AFFECTÉ","AFFECTE"],
+        "Stock DSI":     ["STOCK","STOCKAGE"],
+        "Restitué":      ["RESTITUÉ","RESTITUE","RENDU"],
+        "Remplacé":      ["REMPLACÉ","REMPLACE","REMPLACEMENT","NOUVEAU"],
+        "Vol/Perte":     ["VOL","PERDU","PERTE","DISPARU"],
+        "En cours":      ["EN COURS","COURS","TRANSIT"],
+    }
+    def cat_obs(v):
+        s = str(v).upper()
+        for cat, kws in OBS_CATS.items():
+            if any(k in s for k in kws): return cat
+        return "Autre" if str(v).strip() not in ("nan","None","—","") else "Non renseigné"
+    if "observation" in mouvt_clean.columns:
+        mouvt_clean["raison_mouvement"] = mouvt_clean["observation"].apply(cat_obs)
+    else:
+        mouvt_clean["raison_mouvement"] = "Non renseigné"
+
+    total_m = len(mouvt_clean)
+    nb_dir_m = mouvt_clean["direction"].nunique() if "direction" in mouvt_clean.columns else 0
+
+    st.markdown(f"""<div style="background:linear-gradient(135deg,#2980B9,#1B4F72); border-radius:16px; padding:24px 28px; margin-bottom:20px; color:white;">
+        <div style="font-size:22px; font-weight:800; margin-bottom:6px;">🔄 Mouvements PC</div>
+        <div style="font-size:13px; color:rgba(255,255,255,0.75);">{total_m} mouvements · {nb_dir_m} directions</div>
+    </div>""", unsafe_allow_html=True)
+
+    c1,c2,c3,c4 = st.columns(4)
+    hs_n   = (mouvt_clean["raison_mouvement"]=="Hors Service").sum()
+    reaf_n = (mouvt_clean["raison_mouvement"]=="Réaffecté").sum()
+    kpi(c1,"🔄","Total Mouvements", total_m,   "#2980B9")
+    kpi(c2,"🏢","Directions",       nb_dir_m,  "#1B4F72")
+    kpi(c3,"💀","Hors Service",     hs_n,      "#C8102E")
+    kpi(c4,"♻️","Réaffectés",       reaf_n,    "#27AE60")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Visualisations
+    rpt_hdr("📊 Analyse des Mouvements")
+    c1,c2 = st.columns(2)
+    with c1:
+        if "direction" in mouvt_clean.columns:
+            cnt_d = mouvt_clean.groupby("direction").size().reset_index(name="count").sort_values("count")
+            fig_d = px.bar(cnt_d, x="count", y="direction", orientation="h",
+                           title="Mouvements par Direction", color="count",
+                           color_continuous_scale=[[0,"#AED6F1"],[1,"#2980B9"]], text="count")
             fig_d.update_coloraxes(showscale=False); fig_d.update_traces(textposition="outside")
-            st.plotly_chart(_fig(fig_d,360),use_container_width=True)
-        with c2:
-            if "type_pc" in df_mouvt.columns:
-                cnt_t=df_mouvt["type_pc"].value_counts().reset_index(); cnt_t.columns=["type","count"]
-                fig_t=px.pie(cnt_t,values="count",names="type",title="Type Matériel",color_discrete_sequence=PALETTE,hole=0.45)
-                fig_t.update_traces(textposition="inside",textinfo="percent+label")
-                st.plotly_chart(_fig(fig_t,360),use_container_width=True)
-    search_m=st.text_input("🔍 Rechercher",key="search_mouvt")
-    disp_m=df_mouvt.copy()
+            st.plotly_chart(_fig(fig_d,380), use_container_width=True)
+    with c2:
+        # FIX: utiliser type_pc_clean au lieu de type_pc brut
+        cnt_t = mouvt_clean["type_pc_clean"].value_counts().reset_index(); cnt_t.columns=["type","count"]
+        fig_t = px.pie(cnt_t, values="count", names="type", title="Type de Matériel",
+                       color_discrete_sequence=["#1B4F72","#2980B9","#5DADE2","#AED6F1"], hole=0.50)
+        fig_t.update_traces(textposition="inside", textinfo="percent+label", textfont_size=13)
+        st.plotly_chart(_fig(fig_t,380), use_container_width=True)
+
+    # Raisons de mouvement
+    rpt_hdr("📋 Raisons des Mouvements")
+    c1, c2 = st.columns(2)
+    with c1:
+        cnt_r = mouvt_clean["raison_mouvement"].value_counts().reset_index(); cnt_r.columns=["raison","count"]
+        clr_r = {"Hors Service":"#C8102E","Réaffecté":"#27AE60","Stock DSI":"#2980B9",
+                 "Restitué":"#9B59B6","Remplacé":"#27AE60","Vol/Perte":"#E67E22",
+                 "En cours":"#F39C12","Autre":"#94A3B8","Non renseigné":"#CBD5E1"}
+        fig_r = px.bar(cnt_r, x="raison", y="count", title="Raisons des Mouvements",
+                       color="raison", color_discrete_map=clr_r, text="count")
+        fig_r.update_layout(showlegend=False); fig_r.update_traces(textposition="outside")
+        st.plotly_chart(_fig(fig_r,320), use_container_width=True)
+    with c2:
+        fig_r2 = px.pie(cnt_r, values="count", names="raison", title="Répartition des Raisons",
+                        color="raison", color_discrete_map=clr_r, hole=0.45)
+        fig_r2.update_traces(textposition="inside", textinfo="percent+label")
+        st.plotly_chart(_fig(fig_r2,320), use_container_width=True)
+
+    # === RECHERCHE PAR NOM ===
+    rpt_hdr("👤 Recherche par Utilisateur")
+    col_s, col_b = st.columns([4,1])
+    with col_s:
+        search_user_m = st.text_input("", placeholder="🔍 Entrez le nom d'un utilisateur pour voir ses mouvements...",
+                                       key="search_user_mouvt", label_visibility="collapsed")
+    with col_b:
+        st.button("Rechercher", key="btn_search_mouvt", use_container_width=True)
+
+    if search_user_m:
+        if "utilisateur" in mouvt_clean.columns:
+            mask_u = mouvt_clean["utilisateur"].astype(str).str.contains(search_user_m, case=False, na=False)
+            user_movs = mouvt_clean[mask_u]
+        else:
+            user_movs = pd.DataFrame()
+
+        if len(user_movs) == 0:
+            st.markdown(f'<div class="alert-warn">⚠️ Aucun mouvement trouvé pour <b>{search_user_m}</b></div>', unsafe_allow_html=True)
+        else:
+            # Sélection si plusieurs utilisateurs
+            users_found = user_movs["utilisateur"].unique().tolist() if "utilisateur" in user_movs.columns else []
+            if len(users_found) > 1:
+                sel_u = st.selectbox("Plusieurs correspondances :", users_found, key="sel_u_mouvt")
+                user_movs = user_movs[user_movs["utilisateur"] == sel_u]
+                nom_u = sel_u
+            else:
+                nom_u = users_found[0] if users_found else search_user_m
+
+            dir_u  = val_str(user_movs.iloc[0].get("direction")) if len(user_movs)>0 else "—"
+            site_u = val_str(user_movs.iloc[0].get("site"))      if len(user_movs)>0 else "—"
+
+            # Hero card utilisateur
+            st.markdown(f"""
+            <div style="background:linear-gradient(135deg,#1B4F72,#2980B9); border-radius:14px; padding:20px 24px; margin:12px 0; color:white;">
+                <div style="font-size:20px; font-weight:800;">{nom_u}</div>
+                <div style="font-size:12px; color:rgba(255,255,255,0.7); margin-top:4px;">{dir_u} · {site_u}</div>
+                <div style="display:flex; gap:12px; margin-top:14px; flex-wrap:wrap;">
+                    <div style="background:rgba(255,255,255,0.15); border-radius:8px; padding:8px 16px;">
+                        <div style="font-size:20px; font-weight:800;">{len(user_movs)}</div>
+                        <div style="font-size:10px; color:rgba(255,255,255,0.6);">Mouvements</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.15); border-radius:8px; padding:8px 16px;">
+                        <div style="font-size:20px; font-weight:800;">{user_movs["raison_mouvement"].value_counts().index[0] if len(user_movs)>0 else "—"}</div>
+                        <div style="font-size:10px; color:rgba(255,255,255,0.6);">Raison principale</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Timeline des mouvements
+            rpt_hdr("📜 Historique des Mouvements")
+            sc_m = [c for c in ["utilisateur","direction","site","type_pc_clean","n_inventaire","descriptions",
+                                  "ram","processeur","hdd","observation","raison_mouvement",
+                                  "date_acquisition","Année d'acquisition"] if c in user_movs.columns]
+            # Rename pour affichage
+            disp_u = user_movs[sc_m].copy()
+            rename_map = {"type_pc_clean":"Type PC","raison_mouvement":"Raison","Année d'acquisition":"Année"}
+            disp_u = disp_u.rename(columns={k:v for k,v in rename_map.items() if k in disp_u.columns})
+            st.dataframe(disp_u, use_container_width=True)
+
+            # Analyse détaillée raisons
+            if len(user_movs) > 1:
+                rpt_hdr("📊 Analyse Détaillée")
+                cnt_u = user_movs["raison_mouvement"].value_counts().reset_index(); cnt_u.columns=["raison","count"]
+                fig_u = px.bar(cnt_u, x="raison", y="count", title=f"Raisons des mouvements — {nom_u}",
+                               color="raison", color_discrete_map=clr_r, text="count")
+                fig_u.update_layout(showlegend=False); fig_u.update_traces(textposition="outside")
+                st.plotly_chart(_fig(fig_u, 260), use_container_width=True)
+
+            # Observations détaillées
+            if "observation" in user_movs.columns:
+                obs_list = user_movs["observation"].dropna().unique().tolist()
+                obs_list = [o for o in obs_list if str(o).strip() not in ("nan","None","")]
+                if obs_list:
+                    rpt_hdr("📝 Observations Enregistrées")
+                    for i, obs_val in enumerate(obs_list):
+                        cat = cat_obs(obs_val)
+                        col_obs = {"Hors Service":"alert-danger","Réaffecté":"alert-ok","Stock DSI":"alert-info",
+                                   "Vol/Perte":"alert-danger","Restitué":"alert-info"}.get(cat,"alert-warn")
+                        st.markdown(f'<div class="{col_obs}"><b>#{i+1}</b> {obs_val} <span style="float:right;font-size:11px;font-weight:700;">{cat}</span></div>', unsafe_allow_html=True)
+
+    # Tableau global filtrable
+    st.markdown("<br>", unsafe_allow_html=True)
+    rpt_hdr("📋 Tableau Complet des Mouvements")
+    search_m = st.text_input("🔍 Filtrer le tableau (direction, modèle, N° inventaire...)", key="search_mouvt")
+    disp_m = mouvt_clean.copy()
+    # Supprimer colonnes Unnamed
+    disp_m = disp_m[[c for c in disp_m.columns if not str(c).startswith("Unnamed")]]
     if search_m:
-        mask=pd.Series(False,index=disp_m.index)
-        for col in disp_m.columns: mask|=disp_m[col].astype(str).str.contains(search_m,case=False,na=False)
-        disp_m=disp_m[mask]
-    st.dataframe(disp_m,use_container_width=True,height=420)
-    st.caption(f"{len(disp_m)} mouvement(s)")
-    st.download_button("⬇️ Export Excel",data=export_excel(disp_m,"Mouvements"),file_name=f"mouvements_{datetime.now().strftime('%Y%m%d')}.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        mask = pd.Series(False, index=disp_m.index)
+        for col in disp_m.columns:
+            mask |= disp_m[col].astype(str).str.contains(search_m, case=False, na=False)
+        disp_m = disp_m[mask]
+    # Colonnes utiles pour affichage
+    sc_all = [c for c in ["utilisateur","direction","site","type_pc_clean","n_inventaire",
+                           "descriptions","ram","processeur","hdd","observation","raison_mouvement",
+                           "date_acquisition","Année d'acquisition"] if c in disp_m.columns]
+    disp_show = disp_m[sc_all].rename(columns={"type_pc_clean":"Type PC","raison_mouvement":"Raison","Année d'acquisition":"Année"})
+    st.dataframe(disp_show, use_container_width=True, height=400)
+    st.caption(f"{len(disp_m)} mouvement(s) affichés")
+    st.download_button("⬇️ Export Excel", data=export_excel(disp_show,"Mouvements"),
+                       file_name=f"mouvements_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: RAPPORT IMPRIMANTES

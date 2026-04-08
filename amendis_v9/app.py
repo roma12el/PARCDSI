@@ -239,6 +239,7 @@ if page == "🏠 Tableau de bord":
                 order=["Récent (≤3 ans)","3-5 ans","5-10 ans","Plus de 10 ans","Inconnu"]
                 clr={"Récent (≤3 ans)":"#27AE60","3-5 ans":"#2980B9","5-10 ans":"#E67E22","Plus de 10 ans":"#C8102E","Inconnu":"#94A3B8"}
                 cnt3=df["categorie_age"].value_counts().reindex(order,fill_value=0).reset_index(); cnt3.columns=["cat","count"]
+                cnt3=cnt3[cnt3["count"]>0]  # FIX: supprimer les categories vides
                 fig3=px.bar(cnt3,x="cat",y="count",title="Ancienneté du Parc",color="cat",color_discrete_map=clr,text="count")
                 fig3.update_layout(showlegend=False); fig3.update_traces(textposition="outside")
                 st.plotly_chart(_fig(fig3,340), use_container_width=True)
@@ -339,6 +340,7 @@ elif page == "🖥️ Rapport PC":
                 order=["Récent (≤3 ans)","3-5 ans","5-10 ans","Plus de 10 ans","Inconnu"]
                 clr={"Récent (≤3 ans)":"#27AE60","3-5 ans":"#2980B9","5-10 ans":"#E67E22","Plus de 10 ans":"#C8102E","Inconnu":"#94A3B8"}
                 cnt3=df["categorie_age"].value_counts().reindex(order,fill_value=0).reset_index(); cnt3.columns=["cat","count"]
+                cnt3=cnt3[cnt3["count"]>0]  # FIX: supprimer les categories vides (0)
                 fig3=px.bar(cnt3,x="cat",y="count",title="Ancienneté",color="cat",color_discrete_map=clr,text="count")
                 fig3.update_layout(showlegend=False); fig3.update_traces(textposition="outside")
                 st.plotly_chart(_fig(fig3,400),use_container_width=True)
@@ -693,22 +695,46 @@ elif page == "🖨️ Rapport Imprimantes":
                 st.plotly_chart(_fig(fig,400),use_container_width=True)
         with c2:
             if "type_imp" in df_i.columns:
-                cnt2=df_i["type_imp"].value_counts().reset_index(); cnt2.columns=["type","count"]
-                fig2=px.pie(cnt2,values="count",names="type",title="Réseau vs Monoposte",color_discrete_sequence=["#C8102E","#9B59B6","#2980B9"],hole=0.5)
+                # FIX: garder seulement Monoposte, Réseau, Traceur — ignorer N° série et modèles mal classés
+                def _cat_type_imp(v):
+                    s = str(v).upper().strip()
+                    if any(k in s for k in ["RÉSEAU","RESEAU","NETWORK","RESEAUX"]): return "Réseau"
+                    if any(k in s for k in ["TRACEUR","PLOTTER","TRACT"]): return "Traceur"
+                    # Si c'est un numéro de série ou un modèle (contient des chiffres seuls, ou un nom de modèle HP/EPSON...)
+                    # → c'est en fait un monoposte mal saisi
+                    return "Monoposte"
+                df_i2 = df_i.copy()
+                df_i2["type_clean"] = df_i2["type_imp"].apply(_cat_type_imp)
+                cnt2 = df_i2["type_clean"].value_counts().reset_index(); cnt2.columns=["type","count"]
+                clr_pie = {"Monoposte":"#C8102E","Réseau":"#2980B9","Traceur":"#27AE60"}
+                fig2=px.pie(cnt2,values="count",names="type",title="Réseau vs Monoposte",
+                            color="type",color_discrete_map=clr_pie,hole=0.5)
                 fig2.update_traces(textposition="inside",textinfo="percent+label")
                 st.plotly_chart(_fig(fig2,400),use_container_width=True)
 
-        # FIX: Top modèles - filtrer les numéros d'inventaire
+        # FIX 3: Top modèles avec normalisation pour regrouper les doublons de saisie
         rpt_hdr("🏆 Top Modèles d'Imprimantes")
         if "modele" in df_i.columns:
-            df_mod=df_i[df_i["modele"].notna()].copy()
-            df_mod["modele_clean"]=df_mod["modele"].astype(str).str.strip()
-            df_mod=df_mod[~df_mod["modele_clean"].str.match(r'^\d+\.?\d*$',na=False)]
-            df_mod=df_mod[df_mod["modele_clean"].str.len()>3]
-            cnt3=df_mod["modele_clean"].value_counts().head(12).reset_index(); cnt3.columns=["modele","count"]; cnt3=cnt3.sort_values("count")
-            fig3=px.bar(cnt3,x="count",y="modele",orientation="h",title="Top 12 Modèles",color="count",color_continuous_scale=[[0,"#E9D5FF"],[1,"#7D3C98"]],text="count")
+            import re as _re
+            df_mod = df_i[df_i["modele"].notna()].copy()
+            df_mod["modele_clean"] = df_mod["modele"].astype(str).str.strip()
+            # Filtrer numéros d'inventaire purs
+            df_mod = df_mod[~df_mod["modele_clean"].str.match(r'^\d+\.?\d*$', na=False)]
+            df_mod = df_mod[df_mod["modele_clean"].str.len() > 3]
+            # Normalisation : supprimer espaces multiples, mettre en majuscule, supprimer tirets/points
+            def _norm_modele(s):
+                s = s.upper().strip()
+                s = _re.sub(r'[\s\-\.]+', ' ', s)   # espaces multiples, tirets, points → espace unique
+                s = _re.sub(r'\s+', ' ', s).strip()
+                return s
+            df_mod["modele_norm"] = df_mod["modele_clean"].apply(_norm_modele)
+            cnt3 = df_mod["modele_norm"].value_counts().head(12).reset_index()
+            cnt3.columns = ["modele","count"]; cnt3 = cnt3.sort_values("count")
+            fig3=px.bar(cnt3,x="count",y="modele",orientation="h",title="Top 12 Modèles",
+                        color="count",color_continuous_scale=[[0,"#E9D5FF"],[1,"#7D3C98"]],text="count")
             fig3.update_coloraxes(showscale=False); fig3.update_traces(textposition="outside")
-            st.plotly_chart(_fig(fig3,460),use_container_width=True)
+            fig3.update_layout(yaxis=dict(tickmode="linear", automargin=True))
+            st.plotly_chart(_fig(fig3,480),use_container_width=True)
 
         if "annee_acquisition" in df_i.columns:
             rpt_hdr("📅 Acquisitions par Année")

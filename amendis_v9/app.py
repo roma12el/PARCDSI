@@ -712,29 +712,41 @@ elif page == "🖨️ Rapport Imprimantes":
                 fig2.update_traces(textposition="inside",textinfo="percent+label")
                 st.plotly_chart(_fig(fig2,400),use_container_width=True)
 
-        # FIX 3: Top modèles avec normalisation pour regrouper les doublons de saisie
+        # FIX 3: Top modèles avec normalisation agressive pour regrouper tous les doublons de saisie
         rpt_hdr("🏆 Top Modèles d'Imprimantes")
         if "modele" in df_i.columns:
             import re as _re
             df_mod = df_i[df_i["modele"].notna()].copy()
-            df_mod["modele_clean"] = df_mod["modele"].astype(str).str.strip()
-            # Filtrer numéros d'inventaire purs
-            df_mod = df_mod[~df_mod["modele_clean"].str.match(r'^\d+\.?\d*$', na=False)]
-            df_mod = df_mod[df_mod["modele_clean"].str.len() > 3]
-            # Normalisation : supprimer espaces multiples, mettre en majuscule, supprimer tirets/points
+            df_mod["modele_raw"] = df_mod["modele"].astype(str).str.strip()
+            # Filtrer numéros d'inventaire purs et valeurs inutiles
+            df_mod = df_mod[~df_mod["modele_raw"].str.match(r'^\d+\.?\d*$', na=False)]
+            df_mod = df_mod[df_mod["modele_raw"].str.len() > 3]
+            df_mod = df_mod[~df_mod["modele_raw"].str.upper().str.strip().isin(["SANS","N/A","—","NAN","NONE",""])]
+
             def _norm_modele(s):
+                """Clé de regroupement : majuscule + suppression de TOUS les espaces/tirets/points."""
                 s = s.upper().strip()
-                s = _re.sub(r'[\s\-\.]+', ' ', s)   # espaces multiples, tirets, points → espace unique
-                s = _re.sub(r'\s+', ' ', s).strip()
+                s = _re.sub(r'[\s\-\./]+', '', s)   # tout coller : HP LASER JET P 400 → HPLASERJETP400
                 return s
-            df_mod["modele_norm"] = df_mod["modele_clean"].apply(_norm_modele)
-            cnt3 = df_mod["modele_norm"].value_counts().head(12).reset_index()
-            cnt3.columns = ["modele","count"]; cnt3 = cnt3.sort_values("count")
-            fig3=px.bar(cnt3,x="count",y="modele",orientation="h",title="Top 12 Modèles",
-                        color="count",color_continuous_scale=[[0,"#E9D5FF"],[1,"#7D3C98"]],text="count")
+
+            def _label_modele(s):
+                """Label affiché : majuscule + espaces uniques."""
+                s = s.upper().strip()
+                s = _re.sub(r'[\s\-\.]+', ' ', s)
+                return _re.sub(r'\s+', ' ', s).strip()
+
+            df_mod["cle"]   = df_mod["modele_raw"].apply(_norm_modele)
+            df_mod["label"] = df_mod["modele_raw"].apply(_label_modele)
+
+            # Grouper par clé, afficher le label le plus fréquent pour chaque groupe
+            grp = df_mod.groupby("cle").agg(count=("cle","count"), label=("label", lambda x: x.value_counts().index[0])).reset_index()
+            grp = grp.sort_values("count", ascending=False).head(12).sort_values("count")
+
+            fig3=px.bar(grp, x="count", y="label", orientation="h", title="Top 12 Modèles",
+                        color="count", color_continuous_scale=[[0,"#E9D5FF"],[1,"#7D3C98"]], text="count")
             fig3.update_coloraxes(showscale=False); fig3.update_traces(textposition="outside")
             fig3.update_layout(yaxis=dict(tickmode="linear", automargin=True))
-            st.plotly_chart(_fig(fig3,480),use_container_width=True)
+            st.plotly_chart(_fig(fig3, 480), use_container_width=True)
 
         if "annee_acquisition" in df_i.columns:
             rpt_hdr("📅 Acquisitions par Année")

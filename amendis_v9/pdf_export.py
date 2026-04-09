@@ -75,7 +75,7 @@ def _styles():
     add("SK",      fontName="Helvetica-Bold",    fontSize=8,  textColor=TEXTE_S)
     add("SV",      fontName="Helvetica",         fontSize=8,  textColor=TEXTE)
 
-    add("KV",      fontName="Helvetica-Bold",    fontSize=26, textColor=TEXTE,   alignment=TA_CENTER, leading=30)
+    add("KV",      fontName="Helvetica-Bold",    fontSize=20, textColor=TEXTE,   alignment=TA_CENTER, leading=24, wordWrap='CJK')
     add("KL",      fontName="Helvetica",         fontSize=6,  textColor=TEXTE_S, alignment=TA_CENTER, leading=9)
 
     add("PiedG",   fontName="Helvetica",         fontSize=7,  textColor=colors.HexColor("#999999"), alignment=TA_LEFT)
@@ -570,13 +570,20 @@ def export_rapport_imp_pdf(df: pd.DataFrame, direction: str = None) -> bytes:
         story.append(Spacer(1, 14))
 
     if "modele" in df.columns:
+        import re as _re2
         story.append(_section("Top Modeles"))
         story.append(Spacer(1, 5))
         df_m = df[df["modele"].notna()].copy()
-        df_m["mc"] = df_m["modele"].astype(str).str.strip()
-        df_m = df_m[~df_m["mc"].str.match(r'^\d+\.?\d*$', na=False)]
-        df_m = df_m[df_m["mc"].str.len() > 3]
-        story.append(_barres(df_m["mc"].value_counts().head(10).to_dict()))
+        df_m["mc_raw"] = df_m["modele"].astype(str).str.strip()
+        df_m = df_m[~df_m["mc_raw"].str.match(r'^\d+\.?\d*$', na=False)]
+        df_m = df_m[df_m["mc_raw"].str.len() > 3]
+        df_m = df_m[~df_m["mc_raw"].str.upper().str.strip().isin(["SANS","N/A","—","NAN","NONE",""])]
+        # Clé sans espaces pour regrouper HP LASER JET P400 = HP LASERJET P400 = HP LASER JET P 400
+        df_m["cle"]   = df_m["mc_raw"].str.upper().str.strip().apply(lambda s: _re2.sub(r'[\s\-\./]+','',s))
+        df_m["label"] = df_m["mc_raw"].str.upper().str.strip().apply(lambda s: _re2.sub(r'\s+',' ',_re2.sub(r'[\s\-\.]+', ' ', s)).strip())
+        grp_m = df_m.groupby("cle").agg(count=("cle","count"), label=("label", lambda x: x.value_counts().index[0])).reset_index()
+        grp_m = grp_m.sort_values("count", ascending=False).head(10)
+        story.append(_barres({r["label"]: r["count"] for _, r in grp_m.iterrows()}))
         story.append(Spacer(1, 14))
 
     story.append(PageBreak())
@@ -660,12 +667,18 @@ def export_rapport_general_pdf(df_inv: pd.DataFrame, df_imp: pd.DataFrame,
         story.append(Spacer(1, 14))
 
     if df_imp is not None and "modele" in df_imp.columns:
+        import re as _re3
         story.append(_section("Top Modeles Imprimantes"))
         story.append(Spacer(1, 5))
         df_m = df_imp[df_imp["modele"].notna()].copy()
-        df_m["mc"] = df_m["modele"].astype(str).str.strip()
-        df_m = df_m[~df_m["mc"].str.match(r'^\d+\.?\d*$', na=False)]
-        story.append(_barres(df_m["mc"].value_counts().head(8).to_dict()))
+        df_m["mc_raw"] = df_m["modele"].astype(str).str.strip()
+        df_m = df_m[~df_m["mc_raw"].str.match(r'^\d+\.?\d*$', na=False)]
+        df_m = df_m[~df_m["mc_raw"].str.upper().str.strip().isin(["SANS","N/A","—","NAN","NONE",""])]
+        df_m["cle"]   = df_m["mc_raw"].str.upper().str.strip().apply(lambda s: _re3.sub(r'[\s\-\./]+','',s))
+        df_m["label"] = df_m["mc_raw"].str.upper().str.strip().apply(lambda s: _re3.sub(r'\s+',' ',_re3.sub(r'[\s\-\.]+', ' ', s)).strip())
+        grp_m2 = df_m.groupby("cle").agg(count=("cle","count"), label=("label", lambda x: x.value_counts().index[0])).reset_index()
+        grp_m2 = grp_m2.sort_values("count", ascending=False).head(8)
+        story.append(_barres({r["label"]: r["count"] for _, r in grp_m2.iterrows()}))
         story.append(Spacer(1, 14))
 
     story.append(_section("Conclusions et Recommandations"))
